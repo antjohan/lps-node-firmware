@@ -25,6 +25,7 @@
 /* uwb_twr_anchor.c: Uwb two way ranging anchor implementation */
 
 #include "uwb.h"
+#include <stm32f0xx_hal.h>
 
 #include <string.h>
 #include <stdio.h>
@@ -89,6 +90,9 @@ static volatile uint8_t curr_seq = 0;
 static int curr_anchor = 0;
 uwbConfig_t config;
 
+static int sendSyncCount = 0;
+static int tagState = 1;
+
 // #define printf(...)
 #define debug(...) // printf(__VA_ARGS__)
 
@@ -102,11 +106,11 @@ static void txcallback(dwDevice_t *dev)
 
   switch (txPacket.payload[0]) {
     case POLL:
-      poll_tx = departure;
-      break;
+    poll_tx = departure;
+    break;
     case FINAL:
-      final_tx = departure;
-      break;
+    final_tx = departure;
+    break;
   }
 }
 
@@ -139,26 +143,26 @@ static void rxcallback(dwDevice_t *dev) {
   switch(rxPacket.payload[TYPE]) {
     // Tag received messages
     case ANSWER:
-      debug("ANSWER\r\n");
+    debug("ANSWER\r\n");
 
-      if (rxPacket.payload[SEQ] != curr_seq) {
-        debug("Wrong sequence number!\r\n");
-        return;
-      }
+    if (rxPacket.payload[SEQ] != curr_seq) {
+      debug("Wrong sequence number!\r\n");
+      return;
+    }
 
-      txPacket.payload[0] = FINAL;
-      txPacket.payload[SEQ] = rxPacket.payload[SEQ];
+    txPacket.payload[0] = FINAL;
+    txPacket.payload[SEQ] = rxPacket.payload[SEQ];
 
-      dwNewTransmit(dev);
-      dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
+    dwNewTransmit(dev);
+    dwSetData(dev, (uint8_t*)&txPacket, MAC802154_HEADER_LENGTH+2);
 
-      dwWaitForResponse(dev, true);
-      dwStartTransmit(dev);
+    dwWaitForResponse(dev, true);
+    dwStartTransmit(dev);
 
-      dwGetReceiveTimestamp(dev, &arival);
-      arival.full -= (ANTENNA_DELAY/2);
-      answer_rx = arival;
-      break;
+    dwGetReceiveTimestamp(dev, &arival);
+    arival.full -= (ANTENNA_DELAY/2);
+    answer_rx = arival;
+    break;
     case REPORT:
     {
       reportPayload_t *report = (reportPayload_t *)(rxPacket.payload+2);
@@ -175,34 +179,26 @@ static void rxcallback(dwDevice_t *dev) {
       memcpy(&answer_tx, &report->answerTx, 5);
       memcpy(&final_rx, &report->finalRx, 5);
 
-      printf("%02x%08x ", (unsigned int)poll_tx.high8, (unsigned int)poll_tx.low32);
-      printf("%02x%08x\r\n", (unsigned int)poll_rx.high8, (unsigned int)poll_rx.low32);
-      printf("%02x%08x ", (unsigned int)answer_tx.high8, (unsigned int)answer_tx.low32);
-      printf("%02x%08x\r\n", (unsigned int)answer_rx.high8, (unsigned int)answer_rx.low32);
-      printf("%02x%08x ", (unsigned int)final_tx.high8, (unsigned int)final_tx.low32);
-      printf("%02x%08x\r\n", (unsigned int)final_rx.high8, (unsigned int)final_rx.low32);
 
       tround1 = answer_rx.low32 - poll_tx.low32;
       treply1 = answer_tx.low32 - poll_rx.low32;
       tround2 = final_rx.low32 - answer_tx.low32;
       treply2 = final_tx.low32 - answer_rx.low32;
-
-      printf("%08x %08x\r\n", (unsigned int)tround1, (unsigned int)treply2);
-      printf("\\    /   /     \\\r\n");
-      printf("%08x %08x\r\n", (unsigned int)treply1, (unsigned int)tround2);
-
+      
       tprop_ctn = ((tround1*tround2) - (treply1*treply2)) / (tround1 + tround2 + treply1 + treply2);
-
-      printf("TProp (ctn): %d\r\n", (unsigned int)tprop_ctn);
 
       tprop = tprop_ctn/tsfreq;
       distance = C * tprop;
 
-      printf("distance %d: %5dmm\r\n", rxPacket.sourceAddress[0], (unsigned int)(distance*1000));
+
+      //printf("TProp (ctn): %d\r\n", (unsigned int)tprop_ctn);
+
+      printf("%d:%06dmm\r\n", rxPacket.sourceAddress[0], (unsigned int)(distance*1000));
 
       dwGetReceiveTimestamp(dev, &arival);
       arival.full -= (ANTENNA_DELAY/2);
-      printf("Total in-air time (ctn): 0x%08x\r\n", (unsigned int)(arival.low32-poll_tx.low32));
+      tagState = 1;
+      //printf("Total in-air time (ctn): 0x%08x\r\n", (unsigned int)(arival.low32-poll_tx.low32));
 
       break;
     }
@@ -211,7 +207,7 @@ static void rxcallback(dwDevice_t *dev) {
 
 void initiateRanging(dwDevice_t *dev)
 {
-  printf ("Interrogating anchor %d\r\n",  config.anchors[curr_anchor]);
+  //printf ("Interrogating anchor %d\r\n",  config.anchors[curr_anchor]);
   base_address[0] =  config.anchors[curr_anchor];
   curr_anchor ++;
   if (curr_anchor > config.anchorListSize) {
@@ -235,29 +231,68 @@ void initiateRanging(dwDevice_t *dev)
 
 static uint32_t twrTagOnEvent(dwDevice_t *dev, uwbEvent_t event)
 {
-  switch(event) {
-    case eventPacketReceived:
+
+  if(tagState == 0){
+    switch(event) {
+      case eventPacketReceived:
       rxcallback(dev);
       // 10ms between rangings
-      return 10;
+      return 5;
       break;
-    case eventPacketSent:
+      case eventPacketSent:
       txcallback(dev);
-      return 10;
+      return 5;
       break;
-    case eventTimeout:
+      case eventTimeout:
       initiateRanging(dev);
       return 10;
       break;
-    case eventReceiveFailed:
+      case eventReceiveFailed:
       // Try again ranging in 10ms
       return 10;
       break;
-    default:
+      default:
       configASSERT(false);
-  }
+    }
 
+  }else{
+    
+    if (event == eventPacketReceived) {
+      sniffForTag(dev);
+    } else {
+      dwNewReceive(dev);
+      dwSetDefaults(dev);
+      dwStartReceive(dev);
+    }
+  }
   return MAX_TIMEOUT;
+}
+
+void sniffForTag(dwDevice_t *dev)
+{
+  static dwTime_t arrival;
+  static packet_t rxPacket;
+
+  int dataLength = dwGetDataLength(dev);
+  dwGetRawReceiveTimestamp(dev, &arrival);
+  dwGetData(dev, (uint8_t*)&rxPacket, dataLength);
+
+  dwNewReceive(dev);
+  dwSetDefaults(dev);
+  dwStartReceive(dev);
+
+  //printf("From %02x \r\n", rxPacket.sourceAddress[0]);
+  if(rxPacket.sourceAddress[0] == 0x05){
+    sendSyncCount++;
+  }
+  if(sendSyncCount == 2){
+    printf("Transmition done \r\n");
+    int tic = HAL_GetTick();
+    printf("%d\n\r", tic );
+    sendSyncCount = 0;
+    //HAL_Delay(5);
+    tagState = 0;
+  }
 }
 
 static void twrTagInit(uwbConfig_t * newconfig, dwDevice_t *dev)
