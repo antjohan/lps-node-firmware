@@ -132,7 +132,7 @@ void uwbInit()
   dwSetChannel(dwm, CHANNEL_2);
 
   // Enable smart power by default
-  uint8_t enableSmartPower = 1;
+  uint8_t enableSmartPower = 0;
   cfgReadU8(cfgSmartPower, &enableSmartPower);
   config.smartPower = enableSmartPower != 0;
   if (enableSmartPower) {
@@ -140,7 +140,7 @@ void uwbInit()
   }
 
   // Do not force power by default
-  uint8_t forceTxPower = 0;
+  uint8_t forceTxPower = 1;
   cfgReadU8(cfgForceTxPower, &forceTxPower);
   config.forceTxPower = forceTxPower != 0;
   if (forceTxPower) {
