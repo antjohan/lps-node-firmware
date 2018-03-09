@@ -37,6 +37,7 @@
 
 #include "dwOps.h"
 #include "mac.h"
+#include <stm32f0xx_hal.h>
 
 
 static uint32_t twrAnchorOnEvent(dwDevice_t *dev, uwbEvent_t event)
@@ -63,10 +64,11 @@ static uint32_t twrAnchorOnEvent(dwDevice_t *dev, uwbEvent_t event)
       write(STDOUT_FILENO, rxPacket.payload, dataLength);
       write(STDOUT_FILENO, &dataLength, 2);  // Length repeated for sync detection
     } else {
-      printf("From %02x to %02x @%02x%08x: ", rxPacket.sourceAddress[0],
+      int tic = HAL_GetTick();
+      printf("From %02x to %02x @%02x%08x: Time: %d ", rxPacket.sourceAddress[0],
                                             rxPacket.destAddress[0],
                                             (unsigned int) arrival.high8,
-                                            (unsigned int) arrival.low32);
+                                            (unsigned int) arrival.low32, tic);
       for (int i=0; i<(dataLength - MAC802154_HEADER_LENGTH); i++) {
         printf("%02x", rxPacket.payload[i]);
       }

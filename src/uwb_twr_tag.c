@@ -26,6 +26,8 @@
 
 #include "uwb.h"
 #include <stm32f0xx_hal.h>
+#include <task.h>
+
 
 #include <string.h>
 #include <stdio.h>
@@ -90,8 +92,20 @@ static volatile uint8_t curr_seq = 0;
 static int curr_anchor = 0;
 uwbConfig_t config;
 
+
+// Multipel Tags 
 static int sendSyncCount = 0;
+static int pollIDCount = 0;
 static int tagState = 1;
+#define MASTER_TAG 0
+uint32_t lastWakeTime = 0;
+const TickType_t xFrequency = 95;
+int lastRangingAdress = 6;
+int nextTimeout = 5;
+
+void sniffForTag();
+
+
 
 // #define printf(...)
 #define debug(...) // printf(__VA_ARGS__)
@@ -106,10 +120,31 @@ static void txcallback(dwDevice_t *dev)
 
   switch (txPacket.payload[0]) {
     case POLL:
+    if(txPacket.destAddress[0] == 0x00){
+      lastWakeTime = xTaskGetTickCount();
+    }
+
+    if(txPacket.destAddress[0] == 0x06){
+      if(MASTER_TAG){
+         vTaskDelayUntil( &lastWakeTime, xFrequency);
+      }else{
+        tagState = 1;
+      }
+    }
+
     poll_tx = departure;
+    if(MASTER_TAG){
+        int tic = HAL_GetTick();
+        printf("POLL %d\n\r", tic );
+    }
+    pollIDCount++;
     break;
     case FINAL:
     final_tx = departure;
+    if(MASTER_TAG){
+        int tic = HAL_GetTick();
+        printf("FINAL %d\n\r", tic );
+    }
     break;
   }
 }
@@ -145,6 +180,11 @@ static void rxcallback(dwDevice_t *dev) {
     case ANSWER:
     debug("ANSWER\r\n");
 
+    if(MASTER_TAG){
+        int tic = HAL_GetTick();
+        printf("AWNSER %d\n\r", tic );
+    }
+
     if (rxPacket.payload[SEQ] != curr_seq) {
       debug("Wrong sequence number!\r\n");
       return;
@@ -169,6 +209,10 @@ static void rxcallback(dwDevice_t *dev) {
       double tround1, treply1, treply2, tround2, tprop_ctn, tprop, distance;
 
       debug("REPORT\r\n");
+      if(MASTER_TAG){
+        int tic = HAL_GetTick();
+        printf("REPORT %d\n\r", tic );
+      }
 
       if (rxPacket.payload[SEQ] != curr_seq) {
         printf("Wrong sequence number!\r\n");
@@ -197,7 +241,18 @@ static void rxcallback(dwDevice_t *dev) {
 
       dwGetReceiveTimestamp(dev, &arival);
       arival.full -= (ANTENNA_DELAY/2);
-      tagState = 1;
+      nextTimeout = 2;
+      
+      //printf("DKJHFEKHFDKEFHKEJF %d\n\r",pollIDCount);
+      //if(pollIDCount >= 6){
+        //if(MASTER_TAG){
+         // HAL_Delay(100);
+        //}else{
+          //tagState = 1;
+       // }
+        //pollIDCount = 0;
+        //printf("YEEEHHAHWEHEWU\n\r");
+      //} 
       //printf("Total in-air time (ctn): 0x%08x\r\n", (unsigned int)(arival.low32-poll_tx.low32));
 
       break;
@@ -232,12 +287,13 @@ void initiateRanging(dwDevice_t *dev)
 static uint32_t twrTagOnEvent(dwDevice_t *dev, uwbEvent_t event)
 {
 
-  if(tagState == 0){
+  if(tagState == 0 || MASTER_TAG){
     switch(event) {
       case eventPacketReceived:
+      nextTimeout = 5;
       rxcallback(dev);
       // 10ms between rangings
-      return 5;
+      return nextTimeout;
       break;
       case eventPacketSent:
       txcallback(dev);
@@ -245,11 +301,11 @@ static uint32_t twrTagOnEvent(dwDevice_t *dev, uwbEvent_t event)
       break;
       case eventTimeout:
       initiateRanging(dev);
-      return 10;
+      return 5;
       break;
       case eventReceiveFailed:
       // Try again ranging in 10ms
-      return 10;
+      return 5;
       break;
       default:
       configASSERT(false);
@@ -259,10 +315,12 @@ static uint32_t twrTagOnEvent(dwDevice_t *dev, uwbEvent_t event)
     
     if (event == eventPacketReceived) {
       sniffForTag(dev);
+      return 1;
     } else {
       dwNewReceive(dev);
       dwSetDefaults(dev);
       dwStartReceive(dev);
+      //return 0;
     }
   }
   return MAX_TIMEOUT;
@@ -281,17 +339,10 @@ void sniffForTag(dwDevice_t *dev)
   dwSetDefaults(dev);
   dwStartReceive(dev);
 
-  //printf("From %02x \r\n", rxPacket.sourceAddress[0]);
-  if(rxPacket.sourceAddress[0] == 0x05){
-    sendSyncCount++;
-  }
-  if(sendSyncCount == 2){
-    printf("Transmition done \r\n");
-    int tic = HAL_GetTick();
-    printf("%d\n\r", tic );
-    sendSyncCount = 0;
-    //HAL_Delay(5);
+  int masterAddres = config.address[0] - 1;
+  if(rxPacket.sourceAddress[0] == masterAddres && rxPacket.destAddress[0] == lastRangingAdress){
     tagState = 0;
+    HAL_Delay(2);
   }
 }
 
